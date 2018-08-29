@@ -51,9 +51,10 @@ class NWKR():
     """Nadaraya-Watson kernel regression in the style of Scikit-learn.
 
     The difference with scikit-learn's is that it supports NaN values both in the fit() and predict() methods: it will output np.nan accordingly. Another difference is that it automatically computes the standard deviations of the estimated prediction distribution. See
-
+        Nadaraya, E. A. (1964). On Estimating Regression. Theory of Probability & Its Applications, 9(1), 141–142. https://doi.org/10.1137/1109020
+        Watson, G. S. (1964). Smooth Regression Analysis. Sankhyā: The Indian Journal of Statistics, Series A (1961-2002), 26(4), 359–372. https://doi.org/10.2307/25049340
     for the definition of NWKR and
-
+        Angelini, O., & Di Matteo, T. (2018). Complexity of products: the effect of data regularisation. Retrieved from http://arxiv.org/abs/1808.08249
     for the standard deviations calculation.
     Optimized for speed with Numba.
 
