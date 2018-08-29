@@ -1,0 +1,5 @@
+setuptools==40.2.0
+numpy==1.15.1
+joblib==0.12.2
+numba==0.39.0
+tqdm==4.25.0
