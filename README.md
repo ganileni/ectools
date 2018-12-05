@@ -13,6 +13,7 @@ At the moment, the repository contains:
 - **NWKR**: An implementation of the Nadaraya-Watson Kernel Regression in the style of scikit-learn.
 Compared to that found in scikit-learn, it supports `np.nan` values in the input and calculates the standard deviation of the predictions.
 Implemented in numba for speed
+- **SPSb**: Implementation of the SPSb and Velocity SPSb algorithms (based on the convergence with NWKR proven in one of the papers above), and many utilities for backtesting, metaparameter selection, model stacking and error evaluation. 
 - **parallelization**: A wrapper around joblib for its most common use case.
 Mainly included as a dependency of NWKR.
 - **utilities**: Utility functions included as a dependency.
