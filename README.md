@@ -10,10 +10,11 @@ I plan to release most or ideally all of the code publicly, and will incremental
 Please contact me for any queries regarding its use or any bugs that you may find.
 
 At the moment, the repository contains:
+- **fc**: Implementation of the Fitness-Complexity algorithm, a tied ranking algorithm, and the computations of RCA (Revealed Comparative Advantage following Ballassa) and logPRODY.
+- **SPSb**: Implementation of the SPSb and Velocity SPSb algorithms (based on the convergence with NWKR proven in one of the papers above), and many utilities for backtesting, metaparameter selection, model stacking and error evaluation.
 - **NWKR**: An implementation of the Nadaraya-Watson Kernel Regression in the style of scikit-learn.
 Compared to that found in scikit-learn, it supports `np.nan` values in the input and calculates the standard deviation of the predictions.
-Implemented in numba for speed
-- **SPSb**: Implementation of the SPSb and Velocity SPSb algorithms (based on the convergence with NWKR proven in one of the papers above), and many utilities for backtesting, metaparameter selection, model stacking and error evaluation. 
+Implemented in numba for speed 
 - **parallelization**: A wrapper around joblib for its most common use case.
 Mainly included as a dependency of NWKR.
 - **utilities**: Utility functions included as a dependency.
