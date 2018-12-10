@@ -336,6 +336,7 @@ class SPSbBandwidthOptimizer:
         dt: same argument passed to backtest_SPSb() call for which we are optimizing bandwidth.
         kill_years: same argument passed to backtest_SPSb() call for which we are optimizing bandwidth. This is used to divide the data in test set and trainig set.
         start_year_no: int referencing the starting year of the dataset. It's used to write down strings that describe the timeframes of every column of the model's output.
+
     Returns:
         An SPSbBandwidthOptimizer object.
     """
@@ -362,6 +363,7 @@ class SPSbBandwidthOptimizer:
             bw_bounds: boundaries for search of the minimum. Must be iterable with a tuple of floats for each element in trajectories (ie for each direction). See documentation of scipy.optimize.minimize. If 'auto', will compute the distance distribution of tha data along each direction, and set the bounds for the minimum search to the 1st and 95th percentile of this distribution.
             tol: tolerance for the optimizer. See documentation of scipy.optimize.minimize. tol set at None gives you the highest precision.
             save: whether to save the result and metaparameters in the object.
+
         Returns:
             bw: a list of floats containing the bandwidths, one for each direction of the model.
         """
@@ -483,6 +485,9 @@ def model_error(result: SPSbResult, error='mae'):
     Arguments:
         model: an SPSbResult object, which contains the SPSb predictions (i.e. after calling the SPSbBandwidthOptimizer.predict() method).
         error: a string which indicates the error function to use. See  SPSb.error_dict.
+
+    Returns:
+        model_error: a float, the error of the model.
     """
     return error_dict[error](result.pred, result.groundtruth)
 
@@ -492,7 +497,11 @@ def model_error_vect(result: SPSbResult, error='abs'):
 
     Arguments:
         result: an SPSbResult object, which contains the SPSb predictions (i.e. after calling the SPSbBandwidthOptimizer.predict() method).
-        error: a string which indicates the error function to use. See  SPSb.error_dict_vect."""
+        error: a string which indicates the error function to use. See  SPSb.error_dict_vect.
+
+    Returns:
+        model_error_vect: a np.ndarray containing the model error elementwise.
+        """
     return error_dict_vect[error](result.pred, result.groundtruth)
 
 
@@ -530,7 +539,7 @@ def stack_error_improvement(result_list, error='mae', std_weigh=False):
         error: a string which indicates the error function to use. See  SPSb.error_dict_vect.
         std_weigh: if False, all models will be weighed equally. If True, each model prediction will have weight inversely proportional to its standard deviation (ie the prediction error).
 
-    ReturnsL
+    Returns:
         stack_error_improvement: Stack Error Improvement
     """
     # find minimum error
