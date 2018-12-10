@@ -119,6 +119,58 @@ def format_date(start_year_no, dt, year, msg=''):
             ''.join([' (', msg, ')']) if msg else '')
 
 
+class SPSbResult(SimpleNamespace):
+    """
+    A class to hold the results of one SPSb computation. The results are accessed as attributes of the object.
+
+    Arguments:
+        pred: np.ndarray containing the predictions. Must be of shape [n_years,n_countries].
+        std: np.ndarray containing the standard deviations (expected errors of prediction). Must be of shape [n_years,n_countries].
+        groundtruth: np.ndarray containing the ground truth. Must be of shape [n_years,n_countries].
+        dt: int containing the time interval of the predictions. Used internally.
+
+    Returns:
+        self: an SPSbResult object.
+
+    Attributes:
+        pred, std, groundtruth: see Arguments.
+        errors: a dict containing the prediction errors. Lazily computed on first access.
+        delay_y: ground truth delayed by self.dt years. Lazily computed on first access.
+    """
+    def __init__(self, pred, groundtruth, std, dt):
+        super().__init__()
+        self.pred = pred
+        self.groundtruth = groundtruth
+        self.std = std
+        self.dt = dt
+
+    @property
+    def errors(self):
+        """Lazily computed delayed model errors"""
+        try:
+            return self._errors
+        except AttributeError:
+            self._compute_error()
+            return self._errors
+
+    def _compute_error(self):
+        self._errors = dict()
+        for e in ['mae', 'mse']:
+            self._errors[e] = error_dict[e](self.pred, self.groundtruth)
+
+    @property
+    def delay_y(self):
+        """Lazily computed delayed groundtruth vector"""
+        try:
+            return self._delay_y
+        except AttributeError:
+            self._add_delay_y()
+            return self._delay_y
+
+    def _add_delay_y(self):
+        self._delay_y = np.vstack([self.groundtruth[:-self.dt]] + [np.zeros(self.groundtruth.shape[1])] * self.dt)
+
+
 def backtest_SPSb(trajectories, y, bw, dt=5, kill_years=1, yearmax=None, start_year_no=None, skip_no_groundtruth=False):
     """This function backtests SPSb.
 
@@ -147,14 +199,14 @@ def backtest_SPSb(trajectories, y, bw, dt=5, kill_years=1, yearmax=None, start_y
         print_years = True
     else:
         print_years = False
-    # result will be a namespace
-    result = SimpleNamespace()
     # nan filler for the skipped predictions
     filler = np.empty(trajectories[0].shape[1])
     filler[:] = np.nan
-    result.pred = [filler] * kill_years
-    result.std = [filler] * kill_years
-    result.groundtruth = [filler] * kill_years
+    result = SPSbResult(pred=[filler] * kill_years,
+                        std=[filler] * kill_years,
+                        groundtruth=[filler] * kill_years,
+                        dt=dt
+                        )
     # list of skipped predictions
     if print_years: result.dates = [format_date(start_year_no, dt, i, msg='killed') for i in range(kill_years)]
     # iterate over all other possible predictions, backtesting
@@ -170,7 +222,7 @@ def backtest_SPSb(trajectories, y, bw, dt=5, kill_years=1, yearmax=None, start_y
             result.std.append(filler)
             result.groundtruth.append(filler)
             if print_years: result.dates.append(
-                format_date(start_year_no, dt, year, msg='skipped: no ground truth data'))
+                    format_date(start_year_no, dt, year, msg='skipped: no ground truth data'))
             continue
         model = SPSb([x[:year] for x in trajectories], y[:year], bw)
         pred, std = model.predict([x[year] for x in trajectories])
@@ -179,7 +231,7 @@ def backtest_SPSb(trajectories, y, bw, dt=5, kill_years=1, yearmax=None, start_y
         result.groundtruth.append(groundtruth)
         # list of predictions
         if print_years: result.dates.append(
-            format_date(start_year_no, dt, year, msg='' if groundtruth_data_exists else 'no groundtruth data'))
+                format_date(start_year_no, dt, year, msg='' if groundtruth_data_exists else 'no groundtruth data'))
     # add the remaining dt+no_pred years to the array so that its size matches that of y
     times = trajectories[0].shape[0] - yearmax
     result.pred += [filler] * times
@@ -208,8 +260,8 @@ def optimize_SPSb_bandwidth(trajectories, y, dt, kill_years, error=error_dict['m
         dt: same argument passed to backtest_SPSb() call for which we are optimizing bandwidth.
         kill_years: same argument passed to backtest_SPSb() call for which we are optimizing bandwidth. This is used to divide the data in test set and trainig set.
         error: which cost function to use in order to optimize bandwidth.
-        bw_guess: a guess for the optimizer to start the search. Must be iterable with a float for each element in trajectories (ie for each direction). See documentation of scipy.optimize.minimize
-        bw_bounds: boundaries for search of the minimum. Must be iterable with a tuple of floats for each element in trajectories (ie for each direction). See documentation of scipy.optimize.minimize
+        bw_guess: a guess for the optimizer to start the search. Must be iterable with a float for each element in trajectories (ie for each direction). See documentation of scipy.optimize.minimize. If 'auto' will either use the scipy.optimize.minimize()'s best guess or the mean of bw_bounds.
+        bw_bounds: boundaries for search of the minimum. Must be iterable with a tuple of floats for each element in trajectories (ie for each direction). See documentation of scipy.optimize.minimize. If 'auto', will compute the distance distribution of tha data along each direction, and set the bounds for the minimum search to the 1st and 95th percentile of this distribution.
         tol: tolerance for the optimizer. See documentation of scipy.optimize.minimize. tol set at None gives you the highest precision. Empirically, a tol of 1e-5 results in big speedups (50 to 66%) and bandwidths that are ~3% different. again empirically, a difference of 3% in bandwidth results in a <10e-6 difference in MAE. so you might want to do huge sweeps with high tol, and then maybe look closer at interesting results with maximum precision.
 
     Returns:
@@ -269,12 +321,22 @@ def distances_distribution(g, sample=None):
     """
     g = g[np.isfinite(g)].ravel()
     if sample is not None:
-        g = np.random.choice(g,sample,replace=True if sample>=g.size else False)
+        g = np.random.choice(g, sample, replace=True if sample >= g.size else False)
     return np.abs(np.triu(np.transpose([g]) - g)[np.triu_indices(len(g), k=1)])
 
 
 class SPSbBandwidthOptimizer:
     """
+    Optimizes the bandwidth along all directions of an SPSb model. The optimization is done in-sample (ie on train data), so that future information doesn't leak into the training of the model and backtesting is rigorous. See SPSb.optimize_SPSb_bandwidth() for more information.
+
+    Arguments:
+        trajectories: same argument passed to backtest_SPSb() call for which we are optimizing bandwidth.
+        y: same argument passed to backtest_SPSb() call for which we are optimizing bandwidth.
+        dt: same argument passed to backtest_SPSb() call for which we are optimizing bandwidth.
+        kill_years: same argument passed to backtest_SPSb() call for which we are optimizing bandwidth. This is used to divide the data in test set and trainig set.
+        start_year_no: int referencing the starting year of the dataset. It's used to write down strings that describe the timeframes of every column of the model's output.
+    Returns:
+        An SPSbBandwidthOptimizer object.
     """
 
     def __init__(self, trajectories, y,
@@ -288,9 +350,20 @@ class SPSbBandwidthOptimizer:
         # parameters to be filled:
         self.bw = None
         self.SPSb_result = None
-        self.errors = None
 
     def fit(self, bw_guess='auto', bw_bounds='distances', tol=None, error=error_dict['mae'], save=False):
+        """
+        Optimizes the bandwidth.
+
+        Arguments:
+            error: which cost function to use in order to optimize bandwidth.
+            bw_guess: a guess for the optimizer to start the search. Must be iterable with a float for each element in trajectories (ie for each direction). See documentation of scipy.optimize.minimize. If 'auto' will either use the scipy.optimize.minimize()'s best guess or the mean of bw_bounds.
+            bw_bounds: boundaries for search of the minimum. Must be iterable with a tuple of floats for each element in trajectories (ie for each direction). See documentation of scipy.optimize.minimize. If 'auto', will compute the distance distribution of tha data along each direction, and set the bounds for the minimum search to the 1st and 95th percentile of this distribution.
+            tol: tolerance for the optimizer. See documentation of scipy.optimize.minimize. tol set at None gives you the highest precision.
+            save: whether to save the result and metaparameters in the object.
+        Returns:
+            bw: a list of floats containing the bandwidths, one for each direction of the model.
+        """
         if bw_bounds == 'distances':
             bw_bounds = [np.percentile(distances_distribution(t.ravel()), [1, 95]) for t in self.trajectories]
         elif bw_bounds == 'auto':
@@ -313,6 +386,15 @@ class SPSbBandwidthOptimizer:
         return self.bw
 
     def predict(self, skip_no_groundtruth=True):
+        """
+        Computes the results of the model with the optimized bandwidths.
+
+        Arguments:
+            skip_no_groundtruth: whether to skip computing the result of the model on years where the ground truth is missing, to reduce amount of computation if you are just testing.
+
+        Returns:
+            SPSb_result: an SPSbResult object
+        """
         if not self.is_optimized: raise Exception(
                 'Bandwidth not optimized yet. Call SPSb_bw_optimizer.optimize_bw() before!')
         # compute with optimal bw, then save results of calculations
@@ -325,19 +407,12 @@ class SPSbBandwidthOptimizer:
                                          skip_no_groundtruth=skip_no_groundtruth,
                                          start_year_no=self.start_year_no)
         # compute error and save
-        self.errors = SimpleNamespace()
-        self.errors.mse = mse_error(self.SPSb_result.pred, self.SPSb_result.groundtruth)
-        self.errors.mae = mae_error(self.SPSb_result.pred, self.SPSb_result.groundtruth)
         return self.SPSb_result
 
     def fit_predict(self, bw_guess='auto', bw_bounds='distances', tol=None, error=error_dict['mae'], save=False,
                     skip_no_groundtruth=True):
         self.fit(bw_guess=bw_guess, bw_bounds=bw_bounds, tol=tol, error=error, save=save)
         return self.predict(skip_no_groundtruth=skip_no_groundtruth)
-
-    def delay_y(self):
-        self.delay_y = np.vstack([self.y[:-self.dt]] + [np.zeros(self.y.shape[1])] * self.dt)
-        return self.delay_y
 
 
 class VelocitySPSbOptimizer:
@@ -351,11 +426,10 @@ class VelocitySPSbOptimizer:
                                                    self.opt.kill_years, error=error)
 
     def predict(self):
-        self.SPSb_result = self.ratio * self.opt.SPSb_result.pred + (1 - self.ratio) * self.delay_y_vel
-        # compute error and save
-        self.errors = SimpleNamespace()
-        self.errors.mse = mse_error(self.SPSb_result.pred, self.SPSb_result.groundtruth)
-        self.errors.mae = mae_error(self.SPSb_result.pred, self.SPSb_result.groundtruth)
+        self.SPSb_result = SPSbResult(pred = self.ratio * self.opt.SPSb_result.pred + (1 - self.ratio) * self.opt.SPSb_result.delay_y,
+                                      groundtruth= self.opt.SPSb_result.groundtruth,
+                                      std=None,
+                                      dt=self.opt.dt)
         return self.SPSb_result
 
     def fit_predict(self, error=error_dict['mae']):
@@ -363,14 +437,14 @@ class VelocitySPSbOptimizer:
         return self.predict()
 
 
-def baselines(model : SPSbBandwidthOptimizer, n_iter=1000):
+def baselines(model: SPSbResult, n_iter=1000):
     """Establishes prediction baselines:
 
     'autocorrelation' consists in predicting with last observed velocity (it is known that GDP growth is autocorrelated),
     'random' consists in predicting with an observed velocity chosen at random from the distribution of all observed velocities.
 
     Arguments:
-        model: an SPSbBandwidthOptimizer object, which contains the SPSb predictions (i.e. after calling the SPSbBandwidthOptimizer.predict() method).
+        model: an SPSbResult object, which contains the SPSb predictions (i.e. after calling the SPSbBandwidthOptimizer.predict() method).
         n_iter: the amount of iterations to compute the random baseline.
 
     Returns:
@@ -380,13 +454,13 @@ def baselines(model : SPSbBandwidthOptimizer, n_iter=1000):
     result = dict()
     # establish autocorrelation baseline
     result['autocorrelation'] = dict()
-    result['autocorrelation']['mae'] = mae_error(model.delay_y, model.SPSb_result.groundtruth)
-    result['autocorrelation']['mse'] = mse_error(model.delay_y, model.SPSb_result.groundtruth)
+    result['autocorrelation']['mae'] = mae_error(model.delay_y, model.groundtruth)
+    result['autocorrelation']['mse'] = mse_error(model.delay_y, model.groundtruth)
 
     # establish lower random baseline
     result['random'] = dict()
-    shuffle_pred = model.delay_y_vel.copy()
-    shuffle_groundtruth = model.SPSb_result.groundtruth.copy()
+    shuffle_pred = model.delay_y.copy()
+    shuffle_groundtruth = model.groundtruth.copy()
     keep = np.isfinite(shuffle_pred) & np.isfinite(shuffle_groundtruth)
     shuffle_pred = shuffle_pred[keep]
     shuffle_groundtruth = shuffle_groundtruth[keep]
@@ -402,56 +476,56 @@ def baselines(model : SPSbBandwidthOptimizer, n_iter=1000):
     return result
 
 
-def model_error(model:SPSbBandwidthOptimizer, error='mae'):
+def model_error(result: SPSbResult, error='mae'):
     """Computes the error of a model.
 
     Arguments:
-        model: an SPSbBandwidthOptimizer object, which contains the SPSb predictions (i.e. after calling the SPSbBandwidthOptimizer.predict() method).
+        model: an SPSbResult object, which contains the SPSb predictions (i.e. after calling the SPSbBandwidthOptimizer.predict() method).
         error: a string which indicates the error function to use. See  SPSb.error_dict.
     """
-    return error_dict[error](model.SPSb_result.pred, model.SPSb_result.groundtruth)
+    return error_dict[error](result.pred, result.groundtruth)
 
 
-def model_error_vect(model, error='mae'):
+def model_error_vect(result: SPSbResult, error='abs'):
     """Computes the errors of a model, elementwise (i.e. prediction by prediction, not averaged).
 
     Arguments:
-        model: an SPSbBandwidthOptimizer object, which contains the SPSb predictions (i.e. after calling the SPSbBandwidthOptimizer.predict() method).
+        result: an SPSbResult object, which contains the SPSb predictions (i.e. after calling the SPSbBandwidthOptimizer.predict() method).
         error: a string which indicates the error function to use. See  SPSb.error_dict_vect."""
-    return error_dict_vect[error](model.SPSb_result.pred, model.SPSb_result.groundtruth)
+    return error_dict_vect[error](result.pred, result.groundtruth)
 
 
-def stack_error(model_list, error='mae', std_weigh=False):
+def stack_error(result_list, error='mae', std_weigh=False):
     """
     Compute the error of a stacked model (i.e. where each prediction is the weighted average of the predictions of separate models).
 
     Arguments:
-        model_list: a list of SPSbBandwidthOptimizer objects, each containing the SPSb predictions.
+        result_list: a list of SPSbResult objects, each containing the SPSb predictions.
         error: a string which indicates the error function to use. See  SPSb.error_dict_vect.
         std_weigh: if False, all models will be weighed equally. If True, each model prediction will have weight inversely proportional to its standard deviation (ie the prediction error).
 
     Returns:
          error: The error of the stacked model.
     """
-    preds = np.array([model.SPSb_result.pred for model in model_list])
+    preds = np.array([model.pred for model in result_list])
     if std_weigh:
         # weight predictions by 1/stds
-        stds = np.array([1 / model.SPSb_result.std for model in model_list])
+        stds = np.array([1 / model.std for model in result_list])
         preds = (preds * stds).sum(axis=0) / stds.sum(axis=0)
     else:
         preds = preds.mean(axis=0)
-    groundtruth = model_list[0].SPSb_result.groundtruth
+    groundtruth = result_list[0].groundtruth
     return error_dict[error](preds, groundtruth)
 
 
-def stack_error_improvement(model_list, error='mae', std_weigh=False):
+def stack_error_improvement(result_list, error='mae', std_weigh=False):
     """ Computes error improvement obtained by stacking several models together.
 
     Defining minerror=min([error(x) for x in model_list]) and stack as the error of the stacked model, Stack Error Improvement is calculated as:
             (minerror - stack) / minerror
 
     Arguments:
-        model_list: a list of SPSbBandwidthOptimizer objects, each containing the SPSb predictions.
+        result_list: a list of SPSbResult objects, each containing the SPSb predictions.
         error: a string which indicates the error function to use. See  SPSb.error_dict_vect.
         std_weigh: if False, all models will be weighed equally. If True, each model prediction will have weight inversely proportional to its standard deviation (ie the prediction error).
 
@@ -459,50 +533,85 @@ def stack_error_improvement(model_list, error='mae', std_weigh=False):
         stack_error_improvement: Stack Error Improvement
     """
     # find minimum error
-    minerror = np.min([model.errors.SPSb[error] for model in model_list])
+    minerror = np.min([res.errors[error] for res in result_list])
     # find stacked error
-    stack = stack_error(model_list, error=error, std_weigh=std_weigh)
+    stack = stack_error(result_list, error=error, std_weigh=std_weigh)
     return (minerror - stack) / minerror
 
 
-def error_correlation(model1, model2):
+def error_correlation(result1, result2):
     """Calculates the correlation of the errors of two models.
 
     Arguments:
-        model1, model2: an SPSbBandwidthOptimizer object, which contains the SPSb predictions (i.e. after calling the SPSbBandwidthOptimizer.predict() method).
+        result1, result2: an SPSbResult object, which contains the SPSb predictions (i.e. after calling the SPSbBandwidthOptimizer.predict() method).
 
     Returns:
         corr: correlation of errors of the two models.
     """
-    err1 = error_vect(model1.SPSb_result.pred, model1.SPSb_result.groundtruth)
-    err2 = error_vect(model2.SPSb_result.pred, model2.SPSb_result.groundtruth)
+    err1 = error_vect(result1.pred, result1.groundtruth)
+    err2 = error_vect(result2.pred, result2.groundtruth)
     keep = np.isfinite(err1) * np.isfinite(err2)
     return np.corrcoef(x=err1[keep], y=err2[keep])[0, 1]
 
 
-def stack_error_improvement_matrix(model_list, model_names, error='mae'):
+def stack_error_improvement_matrix(result_list, model_names, error='mae'):
     """Computes the stacked error improvement matrix, which for each element (i,j) contains the pairwise stacked error improvement of model_list i and j. Returns as pd.DataFrame.
 
     Arguments:
-        model_list: a list of SPSbBandwidthOptimizer objects, each containing the SPSb predictions.
+        result_list: a list of SPSbBandwidthOptimizer objects, each containing the SPSb predictions.
         model_names: a list of string with the names of the models. Will be used as column and row names in the returned pd.DataFrame.
         error: a string which indicates the error function to use. See  SPSb.error_dict_vect.
 
     Returns:
         stack_error_improvement_matrix: the stacked error improvement matrix, as a pd.DataFrame.
     """
-    assert len(model_list) == len(model_names)
-    n = len(model_list)
+    assert len(result_list) == len(model_names)
+    n = len(result_list)
     # sort by increasing MSE of the model
-    model_list, model_names = sort_n([model_list, model_names], key=lambda x: x.errors.SPSb[error])
+    result_list, model_names = sort_n([result_list, model_names], key=lambda x: x.errors[error])
     combs = combinations(list(range(n)), 2)
     result = np.empty((n, n))
     np.fill_diagonal(result, 0)
     for n1, n2 in combs:
-        result[n1, n2] = result[n2, n1] = stack_error_improvement([model_list[n1], model_list[n2]], error=error)
+        result[n1, n2] = result[n2, n1] = stack_error_improvement([result_list[n1], result_list[n2]], error=error)
         if result[n1, n2] > 1:
             print(model_names[n1], model_names[n2])
     result = pd.DataFrame(result)
     result.columns = result.index = model_names
     return result
 
+
+def best_model_from_stack_matrix(M):
+    """finds best model by detecting the largest positive submatrix in M. returns observable list ordered by increasing model error."""
+    included = [M.columns[0]]
+    for obs in M.columns[1:]:
+        # check if obs is orthogonal to at least one of the the observables in the included set
+        for inc in included:
+            if M.loc[obs, inc] > 0:
+                include = True
+        # now if it is parallel to at least one of the observable, reverse your choice of including it.
+        for inc in included:
+            if M.loc[obs, inc] <= 0:
+                include = False
+        if include: included.append(obs)
+    return included
+
+
+def best_model_from_stack_matrix_v2(M):
+    """finds best model. returns observable list ordered by increasing model error.
+    difference with V1: observables are sorted by increasing order of contribution
+    to model improvement. it doesn't change results (doublecheck on several datasets)"""
+    included = [M.columns[0]]
+    # sort observables in order of increasing contribution to improvement
+    _, sorted_obs = sort_n([M.loc[obs, :], M.columns[1:]], reverse=True)
+    for obs in sorted_obs:
+        # check if obs is orthogonal to at least one of the the observables in the included set
+        for inc in included:
+            if M.loc[obs, inc] > 0:
+                include = True
+        # now if it is parallel to at least one of the observable, reverse your choice of including it.
+        for inc in included:
+            if M.loc[obs, inc] <= 0:
+                include = False
+        if include: included.append(obs)
+        return included
