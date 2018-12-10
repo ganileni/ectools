@@ -144,6 +144,7 @@ class SPSbResult(SimpleNamespace):
         self.std = std
         self.dt = dt
 
+
     @property
     def errors(self):
         """Lazily computed delayed model errors"""
